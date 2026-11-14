@@ -20,7 +20,7 @@
 <body>
   <main>
     <h1>Registro de presença</h1>
-    <p>No Chrome do Android, ative o NFC, conecte a conta Google com acesso à planilha e toque em Ler crachá.</p>
+    <p>No Chrome do Android, ative o NFC, conecte sua conta Google e toque em Ler crachá. Autorize a localização para gravar as coordenadas do celular junto com a presença.</p>
     <button id="connect" type="button" disabled>Conectar conta Google</button>
     <button id="scan" type="button" disabled>Ler crachá</button>
     <p id="status" role="status">Carregando a conexão com o Google.</p>
@@ -116,6 +116,25 @@
       return response.json();
     }
 
+    function getCoordinates() {
+      return new Promise((resolve) => {
+        if (!navigator.geolocation) {
+          resolve(null);
+          return;
+        }
+        const deadline = setTimeout(() => resolve(null), 12000);
+        function finish(coordinates) {
+          clearTimeout(deadline);
+          resolve(coordinates);
+        }
+        navigator.geolocation.getCurrentPosition(
+          ({ coords }) => finish(coords),
+          () => finish(null),
+          { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+        );
+      });
+    }
+
     async function register(serialNumber, capturedAt) {
       const serial = (serialNumber || '').trim().toLowerCase();
       if (!serial) return 'O crachá foi detectado, mas o Chrome não forneceu o número de série.';
@@ -136,12 +155,16 @@
         document.getElementById(id).textContent = value;
       }
       result.hidden = false;
+      status.textContent = 'Obtendo a localização do celular.';
+      const coordinates = await getCoordinates();
       status.textContent = 'Gravando presença na planilha.';
-      const range = encodeURIComponent("'PRESENÇA'!A:F");
+      const range = encodeURIComponent("'PRESENÇA'!A:H");
       const receipt = await sheetsRequest(range + ':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS',
-        [serial, matricula, nome, gerencia, data, hora]);
+        [serial, matricula, nome, gerencia, data, hora, coordinates?.latitude ?? '', coordinates?.longitude ?? '']);
       if (receipt.updates?.updatedRows !== 1) throw new Error('confirmação ausente');
-      return 'Presença registrada. Afaste o crachá antes da próxima leitura.';
+      return coordinates
+        ? 'Presença registrada com localização. Afaste o crachá antes da próxima leitura.'
+        : 'Presença registrada sem localização. Afaste o crachá antes da próxima leitura.';
     }
 
     scan.addEventListener('click', async () => {
@@ -205,4 +228,3 @@
   </script>
 </body>
 </html>
-
