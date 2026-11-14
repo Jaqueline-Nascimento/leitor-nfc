@@ -141,7 +141,7 @@
       <p class="brand">Comlurb diretoria DSU</p>
       <h1>Registro de presença</h1>
     </header>
-    <p class="instructions">Ative o NFC e toque em Ler crachá. Autorize a localização para gravar as coordenadas junto com a presença.</p>
+    <p class="instructions">Leia o crachá ou registre pela matrícula. Autorize a localização para gravar as coordenadas junto com a presença.</p>
     <button id="scan" type="button" disabled>Ler crachá</button>
     <details id="manual" hidden>
       <summary>Registrar por matrícula</summary>
@@ -181,17 +181,6 @@
       manualSubmit.disabled = busy;
     }
 
-    async function enableManualRegistration() {
-      try {
-        const response = await fetch(endpoint, { credentials: 'omit', cache: 'no-store' });
-        if (!response.ok || (await response.json()).registroPorMatricula !== true) return;
-        manual.hidden = false;
-        if (!canScan) status.textContent = 'Digite a matrícula para registrar a presença.';
-      } catch {
-        // Older deployments only accept NFC registrations.
-      }
-    }
-
     if (!window.isSecureContext) {
       status.textContent = 'Abra o site no Chrome de um Android com NFC.';
     } else if (!access || !/^[a-f0-9]{64}$/.test(access)) {
@@ -199,9 +188,9 @@
     } else {
       status.textContent = canScan
         ? 'Toque em Ler crachá para começar.'
-        : 'Para ler um crachá, abra o site no Chrome de um Android com NFC.';
+        : 'Digite a matrícula para registrar a presença neste computador.';
       setBusy(false);
-      enableManualRegistration();
+      manual.hidden = false;
     }
 
     function getCoordinates() {
@@ -235,6 +224,9 @@
       });
       if (!response.ok) throw new Error('Falha na resposta');
       const receipt = await response.json();
+      if (receipt.error === 'Número de série NFC inválido.' && 'matricula' in identifier) {
+        return 'A implantação do Apps Script ainda precisa ser atualizada para aceitar matrículas.';
+      }
       if (receipt.error) return receipt.error;
       const { matricula, nome, gerencia, data, hora, located } = receipt;
       if (typeof located !== 'boolean') throw new Error('Confirmação ausente');
