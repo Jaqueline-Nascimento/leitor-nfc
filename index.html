@@ -34,6 +34,7 @@
         <dt>Hora</dt><dd id="hora"></dd>
       </dl>
     </section>
+    <small>Versão com diagnóstico de localização</small>
   </main>
   <script>
     const clientId = '463586495391-0ds905l625u5b8g6v6qavg3i7uc7sh6b.apps.googleusercontent.com';
@@ -119,18 +120,20 @@
     function getCoordinates() {
       return new Promise((resolve) => {
         if (!navigator.geolocation) {
-          resolve(null);
+          resolve({ issue: 'Este navegador não disponibiliza a localização.' });
           return;
         }
-        const deadline = setTimeout(() => resolve(null), 12000);
+        const deadline = setTimeout(() => resolve({ issue: 'O celular não informou a localização a tempo. Confira se a localização do Android está ativa.' }), 22000);
         function finish(coordinates) {
           clearTimeout(deadline);
           resolve(coordinates);
         }
         navigator.geolocation.getCurrentPosition(
           ({ coords }) => finish(coords),
-          () => finish(null),
-          { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+          (error) => finish({ issue: error.code === 1
+            ? 'Permita a localização nas configurações deste site no Chrome.'
+            : 'Confira se a localização do Android está ativa e tente em um local com melhor sinal.' }),
+          { enableHighAccuracy: false, maximumAge: 0, timeout: 20000 }
         );
       });
     }
@@ -162,9 +165,9 @@
       const receipt = await sheetsRequest(range + ':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS',
         [serial, matricula, nome, gerencia, data, hora, coordinates?.latitude ?? '', coordinates?.longitude ?? '']);
       if (receipt.updates?.updatedRows !== 1) throw new Error('confirmação ausente');
-      return coordinates
+      return !coordinates.issue
         ? 'Presença registrada com localização. Afaste o crachá antes da próxima leitura.'
-        : 'Presença registrada sem localização. Afaste o crachá antes da próxima leitura.';
+        : 'Presença registrada sem localização. ' + coordinates.issue;
     }
 
     scan.addEventListener('click', async () => {
