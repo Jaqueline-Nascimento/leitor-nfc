@@ -20,10 +20,9 @@
 <body>
   <main>
     <h1>Registro de presença</h1>
-    <p>No Chrome do Android, ative o NFC, conecte sua conta Google e toque em Ler crachá. Autorize a localização para gravar as coordenadas do celular junto com a presença.</p>
-    <button id="connect" type="button" disabled>Conectar conta Google</button>
+    <p>Ative o NFC e toque em Ler crachá. Autorize a localização para gravar as coordenadas junto com a presença.</p>
     <button id="scan" type="button" disabled>Ler crachá</button>
-    <p id="status" role="status">Carregando a conexão com o Google.</p>
+    <p id="status" role="status">Verificando o acesso.</p>
     <section id="result" hidden>
       <h2>Dados da leitura</h2>
       <dl>
@@ -34,149 +33,67 @@
         <dt>Hora</dt><dd id="hora"></dd>
       </dl>
     </section>
-    <small>Versão com diagnóstico de localização</small>
   </main>
   <script>
-    const clientId = '463586495391-0ds905l625u5b8g6v6qavg3i7uc7sh6b.apps.googleusercontent.com';
-    const scope = 'https://www.googleapis.com/auth/spreadsheets';
-    const spreadsheetId = '1BazoYrtXklEiV8bG4DUojqnigck8yi2DAzLYYECIhOo';
-    const valuesUrl = 'https://sheets.googleapis.com/v4/spreadsheets/' + spreadsheetId + '/values/';
-    const connect = document.querySelector('#connect');
+    const endpoint = 'https://script.google.com/macros/s/AKfycbzU6bfpQqdY4LhI2b8-fGf-cI2279pjozxJ1xAgTVRbcj8FbY20iOI3vKMjsbpmcgJV/exec';
+    const access = new URLSearchParams(location.hash.slice(1)).get('acesso');
     const scan = document.querySelector('#scan');
     const status = document.querySelector('#status');
     const result = document.querySelector('#result');
-    const dateFormat = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short' });
-    const timeFormat = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', timeStyle: 'medium', hourCycle: 'h23' });
-    const supportsNfc = window.isSecureContext && location.protocol === 'https:' && 'NDEFReader' in window;
-    let accessToken;
-    let expiresAt = 0;
-
-    function authorized() {
-      return Boolean(accessToken) && Date.now() < expiresAt;
-    }
-
-    function authorizationFailed(message) {
-      accessToken = undefined;
-      scan.disabled = true;
-      connect.disabled = false;
-      status.textContent = message;
-    }
-
-    function initializeGoogle() {
-      const oauth = google.accounts.oauth2;
-      const client = oauth.initTokenClient({
-        client_id: clientId,
-        scope,
-        callback(response) {
-          if (!response.access_token || !oauth.hasGrantedAllScopes(response, scope)) {
-            authorizationFailed('O acesso ao Google Sheets não foi concedido. Tente conectar a conta novamente.');
-            return;
-          }
-          accessToken = response.access_token;
-          expiresAt = Date.now() + Number(response.expires_in) * 1000;
-          connect.disabled = false;
-          scan.disabled = false;
-          status.textContent = 'Conta conectada. Toque em Ler crachá.';
-        },
-        error_callback() {
-          authorizationFailed('A autorização não foi concluída. Abra a conexão com o Google novamente.');
-        }
-      });
-      connect.addEventListener('click', () => {
-        connect.disabled = true;
-        scan.disabled = true;
-        result.hidden = true;
-        status.textContent = 'Autorize o acesso na janela do Google.';
-        client.requestAccessToken({ prompt: 'select_account' });
-      });
-      connect.disabled = false;
-      status.textContent = 'Conecte sua conta Google para começar.';
-    }
-
-    if (supportsNfc) {
-      const script = document.createElement('script');
-      script.src = 'https://accounts.google.com/gsi/client';
-      script.onload = initializeGoogle;
-      script.onerror = () => { status.textContent = 'Não foi possível carregar a conexão com o Google. Atualize a página.'; };
-      document.head.append(script);
+    if (!window.isSecureContext || !('NDEFReader' in window)) {
+      status.textContent = 'Abra o site no Chrome de um Android com NFC.';
+    } else if (!access || !/^[a-f0-9]{64}$/.test(access)) {
+      status.textContent = 'Abra o seu link de acesso para usar o leitor.';
     } else {
-      status.textContent = 'Abra o endereço HTTPS do site no Chrome de um Android com NFC.';
-    }
-
-    async function sheetsRequest(path, row) {
-      const headers = { Authorization: 'Bearer ' + accessToken };
-      const options = { headers };
-      if (row) {
-        options.method = 'POST';
-        headers['Content-Type'] = 'application/json';
-        options.body = JSON.stringify({ values: [row] });
-      }
-      const response = await fetch(valuesUrl + path, options);
-      if (response.status === 401) accessToken = undefined;
-      if (!response.ok) throw new Error(String(response.status));
-      return response.json();
+      status.textContent = 'Toque em Ler crachá para começar.';
+      scan.disabled = false;
     }
 
     function getCoordinates() {
       return new Promise((resolve) => {
         if (!navigator.geolocation) {
-          resolve({ issue: 'Este navegador não disponibiliza a localização.' });
+          resolve(null);
           return;
         }
-        const deadline = setTimeout(() => resolve({ issue: 'O celular não informou a localização a tempo. Confira se a localização do Android está ativa.' }), 22000);
+        const deadline = setTimeout(() => resolve(null), 22000);
         function finish(coordinates) {
           clearTimeout(deadline);
           resolve(coordinates);
         }
         navigator.geolocation.getCurrentPosition(
           ({ coords }) => finish(coords),
-          (error) => finish({ issue: error.code === 1
-            ? 'Permita a localização nas configurações deste site no Chrome.'
-            : 'Confira se a localização do Android está ativa e tente em um local com melhor sinal.' }),
+          () => finish(null),
           { enableHighAccuracy: false, maximumAge: 0, timeout: 20000 }
         );
       });
     }
 
-    async function register(serialNumber, capturedAt) {
-      const serial = (serialNumber || '').trim().toLowerCase();
-      if (!serial) return 'O crachá foi detectado, mas o Chrome não forneceu o número de série.';
-
-      const cadastro = await sheetsRequest('CADASTRO!A2:D?valueRenderOption=FORMATTED_VALUE');
-      const matches = (cadastro.values || []).filter((row) => String(row[0] || '').trim().toLowerCase() === serial);
-      if (!matches.length) return 'Crachá não encontrado na aba CADASTRO.';
-      if (matches.length > 1) return 'O crachá aparece mais de uma vez em CADASTRO. Corrija o cadastro e tente novamente.';
-
-      const [, matricula, nome, gerencia] = matches[0];
-      if (![matricula, nome, gerencia].every((value) => String(value ?? '').trim())) {
-        return 'Preencha matrícula, nome e gerência em CADASTRO antes de registrar este crachá.';
-      }
-
-      const data = dateFormat.format(capturedAt);
-      const hora = timeFormat.format(capturedAt);
+    async function register(serial) {
+      if (!serial) return 'O Chrome não forneceu o número de série do crachá.';
+      status.textContent = 'Obtendo a localização do celular.';
+      const coordinates = await getCoordinates();
+      status.textContent = 'Gravando presença na planilha.';
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        credentials: 'omit',
+        body: JSON.stringify({ access, serial, latitude: coordinates?.latitude, longitude: coordinates?.longitude })
+      });
+      if (!response.ok) throw new Error('Falha na resposta');
+      const receipt = await response.json();
+      if (receipt.error) return receipt.error;
+      const { matricula, nome, gerencia, data, hora, located } = receipt;
+      if (typeof located !== 'boolean') throw new Error('Confirmação ausente');
       for (const [id, value] of Object.entries({ matricula, nome, gerencia, data, hora })) {
         document.getElementById(id).textContent = value;
       }
       result.hidden = false;
-      status.textContent = 'Obtendo a localização do celular.';
-      const coordinates = await getCoordinates();
-      status.textContent = 'Gravando presença na planilha.';
-      const range = encodeURIComponent("'PRESENÇA'!A:H");
-      const receipt = await sheetsRequest(range + ':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS',
-        [serial, matricula, nome, gerencia, data, hora, coordinates?.latitude ?? '', coordinates?.longitude ?? '']);
-      if (receipt.updates?.updatedRows !== 1) throw new Error('confirmação ausente');
-      return !coordinates.issue
+      return located
         ? 'Presença registrada com localização. Afaste o crachá antes da próxima leitura.'
-        : 'Presença registrada sem localização. ' + coordinates.issue;
+        : 'Presença registrada sem localização. Confira a permissão de localização do Chrome.';
     }
 
     scan.addEventListener('click', async () => {
       result.hidden = true;
-      if (!authorized()) {
-        authorizationFailed('A sessão do Google expirou. Conecte a conta novamente.');
-        return;
-      }
-      connect.disabled = true;
       scan.disabled = true;
       status.textContent = 'Autorize o acesso ao NFC, se o Chrome solicitar.';
       const controller = new AbortController();
@@ -190,27 +107,17 @@
 
       function finish(message) {
         stopReading();
-        connect.disabled = false;
-        scan.disabled = !authorized();
+        scan.disabled = false;
         status.textContent = message;
       }
 
       reader.addEventListener('reading', async (event) => {
-        const capturedAt = new Date();
         stopReading();
         status.textContent = 'Consultando o cadastro.';
         try {
-          finish(await register(event.serialNumber, capturedAt));
-        } catch (error) {
-          if (!authorized()) {
-            finish('A sessão do Google expirou. Conecte a conta novamente.');
-          } else if (error.message === '403') {
-            finish('O Google recusou o acesso. Confira se a conta conectada pode editar a planilha.');
-          } else if (!result.hidden) {
-            finish('A gravação não foi confirmada. Confira a aba PRESENÇA antes de repetir a leitura.');
-          } else {
-            finish('Não foi possível consultar o cadastro. Confira a conexão e tente novamente.');
-          }
+          finish(await register(event.serialNumber));
+        } catch {
+          finish('A gravação não foi confirmada. Peça para conferir a planilha antes de repetir.');
         }
       }, { once: true, signal: controller.signal });
       reader.addEventListener('readingerror', () => {
