@@ -88,6 +88,20 @@
     button:focus-visible { outline: 3px solid #b95118; outline-offset: 3px; }
     button:disabled { opacity: .62; cursor: default; }
 
+    #manual { margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--line); }
+    summary { cursor: pointer; font-weight: 700; }
+    form { display: grid; gap: 10px; margin-top: 12px; }
+    input {
+      width: 100%;
+      min-height: 48px;
+      padding: 10px 14px;
+      border: 1px solid #8396b2;
+      border-radius: 14px;
+      color: var(--navy);
+      font: inherit;
+    }
+    input:focus-visible, summary:focus-visible { outline: 3px solid #b95118; outline-offset: 3px; }
+
     #status {
       margin: 16px 0 0;
       padding: 11px 14px;
@@ -129,6 +143,14 @@
     </header>
     <p class="instructions">Ative o NFC e toque em Ler crachá. Autorize a localização para gravar as coordenadas junto com a presença.</p>
     <button id="scan" type="button" disabled>Ler crachá</button>
+    <details id="manual" hidden>
+      <summary>Registrar por matrícula</summary>
+      <form id="manual-form">
+        <label for="employee-id">Matrícula do funcionário</label>
+        <input id="employee-id" type="text" inputmode="numeric" pattern="[0-9]{1,20}" maxlength="20" required>
+        <button id="manual-submit" type="submit">Registrar presença</button>
+      </form>
+    </details>
     <p id="status" role="status">Verificando o acesso.</p>
     <section id="result" hidden>
       <h2>Dados da leitura</h2>
@@ -147,13 +169,39 @@
     const scan = document.querySelector('#scan');
     const status = document.querySelector('#status');
     const result = document.querySelector('#result');
-    if (!window.isSecureContext || !('NDEFReader' in window)) {
+    const manual = document.querySelector('#manual');
+    const form = document.querySelector('#manual-form');
+    const employeeId = document.querySelector('#employee-id');
+    const manualSubmit = document.querySelector('#manual-submit');
+    const canScan = window.isSecureContext && 'NDEFReader' in window;
+
+    function setBusy(busy) {
+      scan.disabled = busy || !canScan;
+      employeeId.disabled = busy;
+      manualSubmit.disabled = busy;
+    }
+
+    async function enableManualRegistration() {
+      try {
+        const response = await fetch(endpoint, { credentials: 'omit', cache: 'no-store' });
+        if (!response.ok || (await response.json()).registroPorMatricula !== true) return;
+        manual.hidden = false;
+        if (!canScan) status.textContent = 'Digite a matrícula para registrar a presença.';
+      } catch {
+        // Older deployments only accept NFC registrations.
+      }
+    }
+
+    if (!window.isSecureContext) {
       status.textContent = 'Abra o site no Chrome de um Android com NFC.';
     } else if (!access || !/^[a-f0-9]{64}$/.test(access)) {
       status.textContent = 'Abra o seu link de acesso para usar o leitor.';
     } else {
-      status.textContent = 'Toque em Ler crachá para começar.';
-      scan.disabled = false;
+      status.textContent = canScan
+        ? 'Toque em Ler crachá para começar.'
+        : 'Para ler um crachá, abra o site no Chrome de um Android com NFC.';
+      setBusy(false);
+      enableManualRegistration();
     }
 
     function getCoordinates() {
@@ -175,15 +223,15 @@
       });
     }
 
-    async function register(serial) {
-      if (!serial) return 'O Chrome não forneceu o número de série do crachá.';
+    async function register(identifier) {
+      if ('serial' in identifier && !identifier.serial) return 'O Chrome não forneceu o número de série do crachá.';
       status.textContent = 'Obtendo a localização do celular.';
       const coordinates = await getCoordinates();
       status.textContent = 'Gravando presença na planilha.';
       const response = await fetch(endpoint, {
         method: 'POST',
         credentials: 'omit',
-        body: JSON.stringify({ access, serial, latitude: coordinates?.latitude, longitude: coordinates?.longitude })
+        body: JSON.stringify({ access, ...identifier, latitude: coordinates?.latitude, longitude: coordinates?.longitude })
       });
       if (!response.ok) throw new Error('Falha na resposta');
       const receipt = await response.json();
@@ -194,14 +242,33 @@
         document.getElementById(id).textContent = value;
       }
       result.hidden = false;
+      if ('matricula' in identifier) form.reset();
       return located
-        ? 'Presença registrada com localização. Afaste o crachá antes da próxima leitura.'
-        : 'Presença registrada sem localização. Confira a permissão de localização do Chrome.';
+        ? 'Presença registrada com localização.'
+        : 'Presença registrada sem localização. Confira a permissão de localização do navegador.';
     }
+
+    async function submitPresence(identifier) {
+      try {
+        return await register(identifier);
+      } catch {
+        return 'A gravação não foi confirmada. Confira a planilha antes de repetir.';
+      }
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (manual.hidden || manualSubmit.disabled) return;
+      const matricula = employeeId.value.trim();
+      result.hidden = true;
+      setBusy(true);
+      status.textContent = await submitPresence({ matricula });
+      setBusy(false);
+    });
 
     scan.addEventListener('click', async () => {
       result.hidden = true;
-      scan.disabled = true;
+      setBusy(true);
       status.textContent = 'Autorize o acesso ao NFC, se o Chrome solicitar.';
       const controller = new AbortController();
       const reader = new NDEFReader();
@@ -214,18 +281,14 @@
 
       function finish(message) {
         stopReading();
-        scan.disabled = false;
+        setBusy(false);
         status.textContent = message;
       }
 
       reader.addEventListener('reading', async (event) => {
         stopReading();
         status.textContent = 'Consultando o cadastro.';
-        try {
-          finish(await register(event.serialNumber));
-        } catch {
-          finish('A gravação não foi confirmada. Peça para conferir a planilha antes de repetir.');
-        }
+        finish(await submitPresence({ serial: event.serialNumber || '' }));
       }, { once: true, signal: controller.signal });
       reader.addEventListener('readingerror', () => {
         status.textContent = 'O Chrome não conseguiu ler a etiqueta. Afaste o crachá e aproxime novamente.';
