@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Teste de leitura NFC</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 32px 16px; background: #edf3f0; color: #16342b; font: 1rem/1.55 system-ui, sans-serif; }
+    main { max-width: 36rem; margin: auto; padding: clamp(22px, 5vw, 40px); background: white; border-radius: 18px; }
+    h1 { margin: 0; line-height: 1.15; }
+    button { width: 100%; min-height: 48px; border: 0; border-radius: 9px; background: #175642; color: white; font: inherit; font-weight: 700; }
+    button:disabled { opacity: .65; }
+    li { margin-bottom: 12px; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Teste de leitura NFC</h1>
+    <p>No Chrome do Android, ative o NFC e aproxime um crachá da traseira do celular após tocar no botão.</p>
+    <button id="scan" type="button">Ler crachá</button>
+    <p id="status" role="status">Aguardando o início do teste.</p>
+    <section id="history" hidden>
+      <h2>Leituras deste teste</h2>
+      <ol id="readings"></ol>
+      <p>Afaste o crachá entre as leituras. Compare duas leituras do mesmo cartão e, se possível, teste outro cartão.</p>
+    </section>
+  </main>
+  <script>
+    const button = document.querySelector('#scan');
+    const status = document.querySelector('#status');
+    const historyPanel = document.querySelector('#history');
+    const readings = document.querySelector('#readings');
+
+    if (!window.isSecureContext || location.protocol !== 'https:') {
+      button.disabled = true;
+      status.textContent = 'Abra o endereço HTTPS publicado no GitHub Pages.';
+    } else if (!('NDEFReader' in window)) {
+      button.disabled = true;
+      status.textContent = 'Este navegador não oferece Web NFC. Tente no Chrome de um Android com NFC.';
+    }
+
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      status.textContent = 'Autorize o acesso ao NFC, se o Chrome solicitar.';
+      const controller = new AbortController();
+      const reader = new NDEFReader();
+      let timeout;
+
+      function finish(message) {
+        clearTimeout(timeout);
+        controller.abort();
+        button.disabled = false;
+        status.textContent = message;
+      }
+
+      reader.addEventListener('reading', (event) => {
+        const codes = [...event.message.records]
+          .filter((record) => record.recordType === 'text' && record.data)
+          .map((record) => new TextDecoder(record.encoding || 'utf-8').decode(record.data).trim())
+          .filter(Boolean);
+        const result = document.createElement('li');
+        result.textContent = 'Série: ' + (event.serialNumber || 'indisponível')
+          + (codes.length ? ' · Texto NFC: ' + codes.join(' / ') : '');
+        readings.append(result);
+        historyPanel.hidden = false;
+        finish(event.serialNumber || codes.length
+          ? 'Leitura concluída. Afaste o crachá e toque em Ler crachá para repetir.'
+          : 'Etiqueta detectada, sem número de série ou texto NFC disponível neste teste.');
+      }, { signal: controller.signal });
+
+      reader.addEventListener('readingerror', () => {
+        status.textContent = 'O Chrome detectou uma etiqueta, mas não conseguiu ler os dados. Afaste o crachá e tente novamente.';
+      }, { signal: controller.signal });
+
+      try {
+        await reader.scan({ signal: controller.signal });
+        status.textContent = 'Aproxime o crachá da traseira do celular.';
+        timeout = setTimeout(() => finish('Nenhuma leitura concluída. Confira se o NFC está ativo e tente de novo.'), 25000);
+      } catch (error) {
+        finish(error.name === 'NotAllowedError'
+          ? 'Permita o acesso ao NFC nas configurações do Chrome e tente novamente.'
+          : 'A leitura não pôde ser iniciada. Confira se o NFC está ativo e tente novamente.');
+      }
+    });
+  </script>
+</body>
+</html>
