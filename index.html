@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Teste de leitura NFC</title>
+  <title>Registro de presença por NFC</title>
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; padding: 32px 16px; background: #edf3f0; color: #16342b; font: 1rem/1.55 system-ui, sans-serif; }
@@ -11,70 +11,189 @@
     h1 { margin: 0; line-height: 1.15; }
     button { width: 100%; min-height: 48px; border: 0; border-radius: 9px; background: #175642; color: white; font: inherit; font-weight: 700; }
     button:disabled { opacity: .65; }
-    li { margin-bottom: 12px; overflow-wrap: anywhere; }
+    button + button { margin-top: 10px; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; }
+    dt { font-weight: 700; }
+    dd { margin: 0; overflow-wrap: anywhere; }
   </style>
 </head>
 <body>
   <main>
-    <h1>Teste de leitura NFC</h1>
-    <p>No Chrome do Android, ative o NFC e aproxime um crachá da traseira do celular após tocar no botão.</p>
-    <button id="scan" type="button">Ler crachá</button>
-    <p id="status" role="status">Aguardando o início do teste.</p>
-    <section id="history" hidden>
-      <h2>Leituras deste teste</h2>
-      <ol id="readings"></ol>
-      <p>Afaste o crachá entre as leituras. Compare duas leituras do mesmo cartão e, se possível, teste outro cartão.</p>
+    <h1>Registro de presença</h1>
+    <p>No Chrome do Android, ative o NFC, conecte a conta Google com acesso à planilha e toque em Ler crachá.</p>
+    <button id="connect" type="button" disabled>Conectar conta Google</button>
+    <button id="scan" type="button" disabled>Ler crachá</button>
+    <p id="status" role="status">Carregando a conexão com o Google.</p>
+    <section id="result" hidden>
+      <h2>Dados da leitura</h2>
+      <dl>
+        <dt>Matrícula</dt><dd id="matricula"></dd>
+        <dt>Nome</dt><dd id="nome"></dd>
+        <dt>Gerência</dt><dd id="gerencia"></dd>
+        <dt>Data</dt><dd id="data"></dd>
+        <dt>Hora</dt><dd id="hora"></dd>
+      </dl>
     </section>
   </main>
   <script>
-    const button = document.querySelector('#scan');
+    const clientId = '463586495391-0ds905l625u5b8g6v6qavg3i7uc7sh6b.apps.googleusercontent.com';
+    const scope = 'https://www.googleapis.com/auth/spreadsheets';
+    const spreadsheetId = '1BazoYrtXklEiV8bG4DUojqnigck8yi2DAzLYYECIhOo';
+    const valuesUrl = 'https://sheets.googleapis.com/v4/spreadsheets/' + spreadsheetId + '/values/';
+    const connect = document.querySelector('#connect');
+    const scan = document.querySelector('#scan');
     const status = document.querySelector('#status');
-    const historyPanel = document.querySelector('#history');
-    const readings = document.querySelector('#readings');
+    const result = document.querySelector('#result');
+    const dateFormat = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short' });
+    const timeFormat = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', timeStyle: 'medium', hourCycle: 'h23' });
+    const supportsNfc = window.isSecureContext && location.protocol === 'https:' && 'NDEFReader' in window;
+    let accessToken;
+    let expiresAt = 0;
 
-    if (!window.isSecureContext || location.protocol !== 'https:') {
-      button.disabled = true;
-      status.textContent = 'Abra o endereço HTTPS publicado no GitHub Pages.';
-    } else if (!('NDEFReader' in window)) {
-      button.disabled = true;
-      status.textContent = 'Este navegador não oferece Web NFC. Tente no Chrome de um Android com NFC.';
+    function authorized() {
+      return Boolean(accessToken) && Date.now() < expiresAt;
     }
 
-    button.addEventListener('click', async () => {
-      button.disabled = true;
+    function authorizationFailed(message) {
+      accessToken = undefined;
+      scan.disabled = true;
+      connect.disabled = false;
+      status.textContent = message;
+    }
+
+    function initializeGoogle() {
+      const oauth = google.accounts.oauth2;
+      const client = oauth.initTokenClient({
+        client_id: clientId,
+        scope,
+        callback(response) {
+          if (!response.access_token || !oauth.hasGrantedAllScopes(response, scope)) {
+            authorizationFailed('O acesso ao Google Sheets não foi concedido. Tente conectar a conta novamente.');
+            return;
+          }
+          accessToken = response.access_token;
+          expiresAt = Date.now() + Number(response.expires_in) * 1000;
+          connect.disabled = false;
+          scan.disabled = false;
+          status.textContent = 'Conta conectada. Toque em Ler crachá.';
+        },
+        error_callback() {
+          authorizationFailed('A autorização não foi concluída. Abra a conexão com o Google novamente.');
+        }
+      });
+      connect.addEventListener('click', () => {
+        connect.disabled = true;
+        scan.disabled = true;
+        result.hidden = true;
+        status.textContent = 'Autorize o acesso na janela do Google.';
+        client.requestAccessToken({ prompt: 'select_account' });
+      });
+      connect.disabled = false;
+      status.textContent = 'Conecte sua conta Google para começar.';
+    }
+
+    if (supportsNfc) {
+      const script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.onload = initializeGoogle;
+      script.onerror = () => { status.textContent = 'Não foi possível carregar a conexão com o Google. Atualize a página.'; };
+      document.head.append(script);
+    } else {
+      status.textContent = 'Abra o endereço HTTPS do site no Chrome de um Android com NFC.';
+    }
+
+    async function sheetsRequest(path, row) {
+      const headers = { Authorization: 'Bearer ' + accessToken };
+      const options = { headers };
+      if (row) {
+        options.method = 'POST';
+        headers['Content-Type'] = 'application/json';
+        options.body = JSON.stringify({ values: [row] });
+      }
+      const response = await fetch(valuesUrl + path, options);
+      if (response.status === 401) accessToken = undefined;
+      if (!response.ok) throw new Error(String(response.status));
+      return response.json();
+    }
+
+    async function register(serialNumber, capturedAt) {
+      const serial = (serialNumber || '').trim().toLowerCase();
+      if (!serial) return 'O crachá foi detectado, mas o Chrome não forneceu o número de série.';
+
+      const cadastro = await sheetsRequest('CADASTRO!A2:D?valueRenderOption=FORMATTED_VALUE');
+      const matches = (cadastro.values || []).filter((row) => String(row[0] || '').trim().toLowerCase() === serial);
+      if (!matches.length) return 'Crachá não encontrado na aba CADASTRO.';
+      if (matches.length > 1) return 'O crachá aparece mais de uma vez em CADASTRO. Corrija o cadastro e tente novamente.';
+
+      const [, matricula, nome, gerencia] = matches[0];
+      if (![matricula, nome, gerencia].every((value) => String(value ?? '').trim())) {
+        return 'Preencha matrícula, nome e gerência em CADASTRO antes de registrar este crachá.';
+      }
+
+      const data = dateFormat.format(capturedAt);
+      const hora = timeFormat.format(capturedAt);
+      for (const [id, value] of Object.entries({ matricula, nome, gerencia, data, hora })) {
+        document.getElementById(id).textContent = value;
+      }
+      result.hidden = false;
+      status.textContent = 'Gravando presença na planilha.';
+      const range = encodeURIComponent("'PRESENÇA'!A:F");
+      const receipt = await sheetsRequest(range + ':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS',
+        [serial, matricula, nome, gerencia, data, hora]);
+      if (receipt.updates?.updatedRows !== 1) throw new Error('confirmação ausente');
+      return 'Presença registrada. Afaste o crachá antes da próxima leitura.';
+    }
+
+    scan.addEventListener('click', async () => {
+      result.hidden = true;
+      if (!authorized()) {
+        authorizationFailed('A sessão do Google expirou. Conecte a conta novamente.');
+        return;
+      }
+      connect.disabled = true;
+      scan.disabled = true;
       status.textContent = 'Autorize o acesso ao NFC, se o Chrome solicitar.';
       const controller = new AbortController();
       const reader = new NDEFReader();
       let timeout;
 
-      function finish(message) {
+      function stopReading() {
         clearTimeout(timeout);
         controller.abort();
-        button.disabled = false;
+      }
+
+      function finish(message) {
+        stopReading();
+        connect.disabled = false;
+        scan.disabled = !authorized();
         status.textContent = message;
       }
 
-      reader.addEventListener('reading', (event) => {
-        const codes = [...event.message.records]
-          .filter((record) => record.recordType === 'text' && record.data)
-          .map((record) => new TextDecoder(record.encoding || 'utf-8').decode(record.data).trim())
-          .filter(Boolean);
-        const result = document.createElement('li');
-        result.textContent = 'Série: ' + (event.serialNumber || 'indisponível')
-          + (codes.length ? ' · Texto NFC: ' + codes.join(' / ') : '');
-        readings.append(result);
-        historyPanel.hidden = false;
-        finish(event.serialNumber || codes.length
-          ? 'Leitura concluída. Afaste o crachá e toque em Ler crachá para repetir.'
-          : 'Etiqueta detectada, sem número de série ou texto NFC disponível neste teste.');
-      }, { signal: controller.signal });
-
+      reader.addEventListener('reading', async (event) => {
+        const capturedAt = new Date();
+        stopReading();
+        status.textContent = 'Consultando o cadastro.';
+        try {
+          finish(await register(event.serialNumber, capturedAt));
+        } catch (error) {
+          if (!authorized()) {
+            finish('A sessão do Google expirou. Conecte a conta novamente.');
+          } else if (error.message === '403') {
+            finish('O Google recusou o acesso. Confira se a conta conectada pode editar a planilha.');
+          } else if (!result.hidden) {
+            finish('A gravação não foi confirmada. Confira a aba PRESENÇA antes de repetir a leitura.');
+          } else {
+            finish('Não foi possível consultar o cadastro. Confira a conexão e tente novamente.');
+          }
+        }
+      }, { once: true, signal: controller.signal });
       reader.addEventListener('readingerror', () => {
-        status.textContent = 'O Chrome detectou uma etiqueta, mas não conseguiu ler os dados. Afaste o crachá e tente novamente.';
+        status.textContent = 'O Chrome não conseguiu ler a etiqueta. Afaste o crachá e aproxime novamente.';
       }, { signal: controller.signal });
 
       try {
         await reader.scan({ signal: controller.signal });
+        if (controller.signal.aborted) return;
         status.textContent = 'Aproxime o crachá da traseira do celular.';
         timeout = setTimeout(() => finish('Nenhuma leitura concluída. Confira se o NFC está ativo e tente de novo.'), 25000);
       } catch (error) {
@@ -86,3 +205,4 @@
   </script>
 </body>
 </html>
+
